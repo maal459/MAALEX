@@ -1,0 +1,9 @@
+{
+  "licenses": [
+    {
+      "key": "OWNER-DEMO-KEY",
+      "label": "Owner test key — replace before production",
+      "expiresAt": "2099-12-31T23:59:59.000Z"
+    }
+  ]
+}

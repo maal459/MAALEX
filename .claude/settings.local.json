@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import json; har = json.load\\(open\\(r'C:\\\\Users\\\\Abdiwahab\\\\Downloads\\\\myaccount.telesom.com.har', encoding='utf-8'\\)\\); entries = har['log']['entries']; print\\('Total entries:', len\\(entries\\)\\); [print\\(e['request']['method'], e['request']['url'][:120]\\) for e in entries]\")",
+      "Bash(python extract_har.py)",
+      "Bash(node --check src/index.js)",
+      "Bash(node --check src/telesomApi.js)",
+      "Bash(node --check src/telesomService.js)",
+      "Bash(node --check src/config.js)",
+      "Bash(node -e \"const m = await import\\('./src/telesomService.js'\\); const s = new m.TelesomAutomationService\\(\\); console.log\\('instantiated OK'\\); await s.shutdown\\(\\);\" --input-type=module)",
+      "Bash(node --check App.js)",
+      "Bash(node --check context/SessionContext.js)",
+      "Bash(node --check screens/SetupScreen.js)",
+      "Bash(node --check screens/LiveScreen.js)",
+      "Bash(node --check src/licenses.js)",
+      "Bash(node --check screens/ReportsScreen.js)",
+      "Bash(node --check screens/LicenseScreen.js)",
+      "Bash(node --check theme/themes.js)",
+      "Bash(node --check theme/ThemeContext.js)",
+      "Bash(node --check services/zaadBackend.js)"
+    ]
+  }
+}
