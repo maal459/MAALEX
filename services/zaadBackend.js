@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ZAAD_BACKEND_BASE_URL, isZaadBackendConfigured } from '../constants/zaadBackendConfig';
 import { getCachedDeviceId, getDeviceId } from './deviceId';
+import { verifyLicense, getOrStartTrial } from './licensing';
 
 export const LICENSE_STORAGE_KEY = '@maalex/license-key';
 
@@ -69,7 +70,8 @@ const request = async (path, options = {}) => {
     ...(options.headers || {}),
   };
 
-  if (cachedLicenseKey) {
+  // Don't send the trial marker as a server header — it's not a real key.
+  if (cachedLicenseKey && cachedLicenseKey !== 'TRIAL') {
     headers['x-maalex-license'] = cachedLicenseKey;
   }
 
@@ -123,23 +125,22 @@ const request = async (path, options = {}) => {
 };
 
 export const validateLicenseRemote = async (licenseKey) => {
-  const deviceId = await getDeviceId();
-  const data = await request('/api/license/validate', {
-    method: 'POST',
-    body: { licenseKey, deviceId },
-  });
-
-  return data.license;
+  // Trial keys are verified locally — no server call needed.
+  if (String(licenseKey || '').trim() === 'TRIAL') {
+    const result = await getOrStartTrial();
+    if (!result.ok) throw new ZaadBackendError(result.reason, 0, null);
+    return result.license;
+  }
+  // Signed Ed25519 keys are verified locally — no server call needed.
+  const result = await verifyLicense(licenseKey);
+  if (!result.ok) throw new ZaadBackendError(result.reason, 0, null);
+  return result.license;
 };
 
 export const requestTrialLicense = async () => {
-  const deviceId = await getDeviceId();
-  const data = await request('/api/license/trial', {
-    method: 'POST',
-    body: { deviceId },
-  });
-
-  return data.license;
+  const result = await getOrStartTrial();
+  if (!result.ok) throw new ZaadBackendError(result.reason, 0, null);
+  return result.license;
 };
 
 export const loginToZaad = async ({

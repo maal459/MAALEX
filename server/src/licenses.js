@@ -6,6 +6,24 @@ const SIG_BYTES = 16;
 const TRIAL_DURATION_MS = 3 * 24 * 60 * 60 * 1000;
 const ANY_DEVICE = '*';
 
+// ─── Ed25519 public key (same key embedded in the app) ────────────────────────
+const ED25519_PUBLIC_HEX = '67a61b15bb113eb3751605a9ab0b8bac771e8914575c5f49b06e0c0372708986';
+const _ed25519PubDer = Buffer.concat([
+  Buffer.from('302a300506032b6570032100', 'hex'),
+  Buffer.from(ED25519_PUBLIC_HEX, 'hex'),
+]);
+const ed25519PublicKey = crypto.createPublicKey({ key: _ed25519PubDer, format: 'der', type: 'spki' });
+
+const verifyEd25519Sig = (payloadB64, sigB64) => {
+  try {
+    const sig = Buffer.from(String(sigB64), 'base64url');
+    if (sig.length !== 64) return false;
+    return crypto.verify(null, Buffer.from(String(payloadB64)), ed25519PublicKey, sig);
+  } catch {
+    return false;
+  }
+};
+
 const getSecret = () => {
   const secret = process.env.LICENSE_SECRET;
 
@@ -82,7 +100,7 @@ export const issueTrialLicense = (deviceId) => {
   });
 };
 
-export const validateLicense = (rawKey, { deviceId } = {}) => {
+export const validateLicense = (rawKey, { deviceId: incomingDeviceId } = {}) => {
   const key = String(rawKey || '').trim();
 
   if (!key) {
@@ -107,10 +125,20 @@ export const validateLicense = (rawKey, { deviceId } = {}) => {
   }
 
   const [, payloadB64, sigB64] = parts;
-  const expectedSig = sign(payloadB64);
 
-  if (!constantTimeEq(expectedSig, sigB64)) {
-    return { ok: false, reason: 'License signature mismatch.' };
+  // Ed25519 signatures are 64 bytes = 86 base64url chars.
+  // Legacy HMAC-SHA256 truncated sigs are 16 bytes = 22 base64url chars.
+  const isEd25519 = String(sigB64).length === 86;
+
+  if (isEd25519) {
+    if (!verifyEd25519Sig(payloadB64, sigB64)) {
+      return { ok: false, reason: 'License signature mismatch.' };
+    }
+  } else {
+    const expectedSig = sign(payloadB64);
+    if (!constantTimeEq(expectedSig, sigB64)) {
+      return { ok: false, reason: 'License signature mismatch.' };
+    }
   }
 
   let payload;
@@ -120,20 +148,26 @@ export const validateLicense = (rawKey, { deviceId } = {}) => {
     return { ok: false, reason: 'License payload is corrupt.' };
   }
 
-  if (typeof payload?.exp !== 'number' || payload.exp < Date.now()) {
+  // Support both old field names (t/exp/dev/lbl/iat) and new (tier/expiresAt/deviceId/label/issuedAt)
+  const tier      = payload.tier  ?? payload.t   ?? 'full';
+  const expiresAt = payload.expiresAt ?? payload.exp ?? 0;
+  const deviceId  = payload.deviceId ?? payload.dev ?? null;
+  const label     = payload.label ?? payload.lbl ?? '';
+  const issuedAt  = payload.issuedAt ?? payload.iat ?? Date.now();
+
+  if (typeof expiresAt !== 'number' || expiresAt < Date.now()) {
     return {
       ok: false,
-      reason: payload?.t === 'trial' ? 'Free trial has ended.' : 'License expired.',
+      reason: tier === 'trial' ? 'Free trial has ended.' : 'License expired.',
       payload,
     };
   }
 
-  if (payload.dev && payload.dev !== ANY_DEVICE) {
-    if (!deviceId) {
+  if (deviceId && deviceId !== ANY_DEVICE) {
+    if (!incomingDeviceId) {
       return { ok: false, reason: 'License is bound to a device. Send device id.' };
     }
-
-    if (String(payload.dev) !== String(deviceId).trim()) {
+    if (String(deviceId) !== String(incomingDeviceId).trim()) {
       return { ok: false, reason: 'License is bound to a different device.' };
     }
   }
@@ -142,11 +176,11 @@ export const validateLicense = (rawKey, { deviceId } = {}) => {
     ok: true,
     license: {
       key,
-      tier: payload.t || 'full',
-      label: payload.lbl || '',
-      expiresAt: new Date(payload.exp).toISOString(),
-      issuedAt: new Date(payload.iat || Date.now()).toISOString(),
-      deviceId: payload.dev === ANY_DEVICE ? '' : payload.dev,
+      tier,
+      label,
+      expiresAt: new Date(expiresAt).toISOString(),
+      issuedAt: new Date(issuedAt).toISOString(),
+      deviceId: deviceId === ANY_DEVICE ? '' : (deviceId || ''),
     },
   };
 };
