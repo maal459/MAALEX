@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -13,17 +13,22 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '../theme/ThemeContext';
 import { APP_NAME } from '../constants/appConfig';
 import {
+  getOrStartTrial,
   persistLicenseKey,
-  requestTrialLicense,
-  setCachedLicenseKey,
-  validateLicenseRemote,
-} from '../services/zaadBackend';
+  verifyLicense,
+} from '../services/licensing';
+import { getDeviceId } from '../services/deviceId';
 
 const LicenseScreen = ({ initialError, onValidated }) => {
   const { colors } = useTheme();
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(initialError || '');
+  const [deviceId, setDeviceId] = useState('');
+
+  useEffect(() => {
+    getDeviceId().then(setDeviceId).catch(() => {});
+  }, []);
 
   const handleActivate = async () => {
     const trimmed = key.trim();
@@ -35,14 +40,16 @@ const LicenseScreen = ({ initialError, onValidated }) => {
 
     setBusy(true);
     setError('');
-    setCachedLicenseKey(trimmed);
 
     try {
-      const license = await validateLicenseRemote(trimmed);
+      const result = await verifyLicense(trimmed);
+      if (!result.ok) {
+        setError(result.reason || 'License could not be validated.');
+        return;
+      }
       await persistLicenseKey(trimmed);
-      onValidated(license);
+      onValidated(result.license);
     } catch (err) {
-      setCachedLicenseKey('');
       setError(err.message || 'License could not be validated.');
     } finally {
       setBusy(false);
@@ -54,12 +61,13 @@ const LicenseScreen = ({ initialError, onValidated }) => {
     setError('');
 
     try {
-      const license = await requestTrialLicense();
-      setCachedLicenseKey(license.key);
-      await persistLicenseKey(license.key);
-      onValidated(license);
+      const result = await getOrStartTrial();
+      if (!result.ok) {
+        setError(result.reason || 'Could not start the free trial.');
+        return;
+      }
+      onValidated(result.license);
     } catch (err) {
-      setCachedLicenseKey('');
       setError(err.message || 'Could not start the free trial.');
     } finally {
       setBusy(false);
@@ -96,12 +104,13 @@ const LicenseScreen = ({ initialError, onValidated }) => {
                   borderColor: colors.border,
                 },
               ]}
-              placeholder="XXXX-XXXX-XXXX"
+              placeholder="MAALEX.xxx.xxx"
               placeholderTextColor={colors.textMuted}
               value={key}
               onChangeText={setKey}
-              autoCapitalize="characters"
+              autoCapitalize="none"
               autoCorrect={false}
+              multiline
             />
 
             <TouchableOpacity
@@ -144,8 +153,20 @@ const LicenseScreen = ({ initialError, onValidated }) => {
             </TouchableOpacity>
           </View>
 
+          {deviceId ? (
+            <View style={styles.deviceBlock}>
+              <Text style={[styles.deviceLabel, { color: colors.textMuted }]}>Your device ID</Text>
+              <Text style={[styles.deviceId, { color: colors.textSecondary }]} selectable>
+                {deviceId}
+              </Text>
+              <Text style={[styles.deviceHint, { color: colors.textMuted }]}>
+                Share this with the developer when purchasing a license.
+              </Text>
+            </View>
+          ) : null}
+
           <Text style={[styles.note, { color: colors.textMuted }]}>
-            Trials are bound to this device. Contact the administrator for a full key.
+            Licenses are bound to this device. Contact the developer for a key.
           </Text>
         </View>
       </KeyboardAvoidingView>
@@ -176,9 +197,11 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     paddingHorizontal: 14,
     fontFamily: 'semiBold',
-    fontSize: 15,
-    letterSpacing: 1,
+    fontSize: 13,
+    letterSpacing: 0.4,
     borderWidth: 1,
+    minHeight: 80,
+    textAlignVertical: 'top',
   },
   button: {
     marginTop: 16,
@@ -206,6 +229,10 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
   },
   trialButtonText: { fontFamily: 'bold', fontSize: 15 },
+  deviceBlock: { marginTop: 24, alignItems: 'center', paddingHorizontal: 8 },
+  deviceLabel: { fontFamily: 'medium', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 },
+  deviceId: { fontFamily: 'semiBold', fontSize: 12, letterSpacing: 0.5, textAlign: 'center' },
+  deviceHint: { fontFamily: 'regular', fontSize: 11, marginTop: 4, textAlign: 'center' },
 });
 
 export default LicenseScreen;

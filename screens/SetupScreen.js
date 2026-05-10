@@ -22,8 +22,6 @@ const SetupScreen = () => {
     setLoginIdentifier,
     recipientNumber,
     setRecipientNumber,
-    triggerBalance,
-    setTriggerBalance,
     currency,
     setCurrency,
     pin,
@@ -33,12 +31,14 @@ const SetupScreen = () => {
     busy,
     errorMessage,
     requiresOtp,
+    sessionExpired,
     isSignedIn,
     accountHolderName,
     accountLabel,
     startSignIn,
     submitOtp,
     signOut,
+    cancelSignIn,
   } = useSession();
 
   const [otpCode, setOtpCode] = useState('');
@@ -58,8 +58,31 @@ const SetupScreen = () => {
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]} edges={['top']}>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          showsVerticalScrollIndicator
+        >
+          {sessionExpired && !isSignedIn ? (
+            <View
+              style={[
+                styles.expiredBanner,
+                { backgroundColor: 'rgba(239,68,68,0.10)', borderColor: colors.danger },
+              ]}
+            >
+              <Ionicons name="warning-outline" size={18} color={colors.danger} />
+              <Text style={[styles.expiredText, { color: colors.danger }]}>
+                Session expired — please sign in again to keep auto-transfer running.
+              </Text>
+            </View>
+          ) : null}
+
           <Text style={[styles.heading, { color: colors.textPrimary }]}>
             {isSignedIn ? 'Settings' : 'Sign in'}
           </Text>
@@ -185,6 +208,20 @@ const SetupScreen = () => {
                   <Text style={[styles.primaryButtonText, { color: colors.onPrimary }]}>Verify</Text>
                 )}
               </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.secondaryButton, { borderColor: colors.border }]}
+                onPress={() => {
+                  setOtpCode('');
+                  cancelSignIn();
+                }}
+                disabled={busy}
+              >
+                <Ionicons name="arrow-back-outline" size={16} color={colors.textSecondary} />
+                <Text style={[styles.secondaryButtonText, { color: colors.textSecondary }]}>
+                  Back to sign in
+                </Text>
+              </TouchableOpacity>
             </View>
           ) : null}
 
@@ -209,18 +246,9 @@ const SetupScreen = () => {
               autoCorrect={false}
             />
 
-            <View style={styles.iconLabelRow}>
-              <Ionicons name="trending-up-outline" size={16} color={colors.textSecondary} />
-              <Text style={[styles.label, { color: colors.textSecondary }]}>Threshold (USD)</Text>
-            </View>
-            <TextInput
-              style={[styles.input, inputStyles(colors)]}
-              placeholder="600"
-              placeholderTextColor={colors.textMuted}
-              keyboardType="decimal-pad"
-              value={triggerBalance}
-              onChangeText={setTriggerBalance}
-            />
+            <Text style={[styles.helperText, { color: colors.textMuted }]}>
+              Every incoming credit is forwarded to this recipient automatically — same exact amount, no threshold check.
+            </Text>
 
             <View style={styles.iconLabelRow}>
               <Ionicons name="keypad-outline" size={16} color={colors.textSecondary} />
@@ -275,8 +303,29 @@ const inputStyles = (colors) => ({
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
-  scroll: { padding: 20, paddingBottom: 40 },
+  scroll: { padding: 20, paddingBottom: 120, flexGrow: 1 },
   heading: { fontSize: 24, fontFamily: 'bold', marginBottom: 18 },
+  expiredBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 14,
+  },
+  expiredText: { flex: 1, fontFamily: 'semiBold', fontSize: 13 },
+  secondaryButton: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  secondaryButtonText: { fontFamily: 'semiBold', fontSize: 14 },
   profileCard: {
     borderRadius: 16,
     padding: 16,

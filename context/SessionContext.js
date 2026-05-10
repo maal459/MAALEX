@@ -8,14 +8,12 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import telesomSession from '../services/telesomSession';
 import {
-  closeZaadSession,
-  getZaadSession,
-  loginToZaad,
-  refreshZaadBalance,
-  submitZaadAuthenticationCode,
-  transferZaadFunds,
-} from '../services/zaadBackend';
+  ensureSmsPermission,
+  isSmsSupported,
+  subscribeToCreditSms,
+} from '../services/smsListener';
 import {
   ZAAD_AUTO_TRANSFER_DESCRIPTION,
   ZAAD_AUTO_TRANSFER_TARGET_NUMBER,
@@ -23,7 +21,8 @@ import {
 } from '../constants/appConfig';
 
 const STORAGE_KEY = '@maalex/zaad-auto-transfer';
-const POLL_INTERVAL_MS = 600;
+
+const FIXED_TRIGGER_BALANCE_USD = String(ZAAD_AUTO_TRANSFER_TRIGGER_BALANCE_USD ?? 0.01);
 
 const sanitize = (value) => String(value ?? '').replace(/\s+/g, '').trim();
 
@@ -35,19 +34,18 @@ export const SessionProvider = ({ children }) => {
   const [recipientNumber, setRecipientNumber] = useState(
     String(ZAAD_AUTO_TRANSFER_TARGET_NUMBER || '')
   );
-  const [triggerBalance, setTriggerBalance] = useState(
-    String(ZAAD_AUTO_TRANSFER_TRIGGER_BALANCE_USD ?? 600)
-  );
+  const triggerBalance = FIXED_TRIGGER_BALANCE_USD;
   const [currency, setCurrency] = useState('840');
   const [pin, setPin] = useState('');
   const [password, setPassword] = useState('');
-  const [sessionId, setSessionId] = useState('');
   const [snapshot, setSnapshot] = useState(null);
   const [busy, setBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const lastSettingsHashRef = useRef('');
 
+  const sessionId = snapshot?.sessionId || '';
   const requiresOtp = Boolean(snapshot?.requiresAuthenticationCode);
+  const sessionExpired = Boolean(snapshot?.sessionExpired);
   const isConnected = snapshot?.status === 'connected';
   const isSignedIn = Boolean(sessionId) && !requiresOtp;
   const balanceUsd = snapshot?.balanceUsd || '';
@@ -60,66 +58,34 @@ export const SessionProvider = ({ children }) => {
     () => ({
       recipientNumber: sanitize(recipientNumber),
       amountUsd: '',
-      triggerBalanceUsd: String(triggerBalance || ''),
+      triggerBalanceUsd: triggerBalance,
       description: ZAAD_AUTO_TRANSFER_DESCRIPTION,
       pin: String(pin || '').replace(/\D/g, ''),
     }),
     [recipientNumber, triggerBalance, pin]
   );
 
+  // ─── Hydrate persisted setup form ────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
 
     AsyncStorage.getItem(STORAGE_KEY)
       .then((stored) => {
-        if (cancelled || !stored) {
-          return;
-        }
+        if (cancelled || !stored) return;
 
         try {
           const parsed = JSON.parse(stored);
-
-          if (parsed.loginIdentifier) {
-            setLoginIdentifier(parsed.loginIdentifier);
-          }
-
-          if (parsed.recipientNumber) {
-            setRecipientNumber(parsed.recipientNumber);
-          }
-
-          if (parsed.triggerBalance) {
-            setTriggerBalance(String(parsed.triggerBalance));
-          }
-
-          if (parsed.currency) {
-            setCurrency(String(parsed.currency));
-          }
-
-          if (parsed.pin) {
-            // Persisted on-device so auto-transfer can resume without the user
-            // re-typing the PIN after every app launch. AsyncStorage on Android
-            // is NOT encrypted by default — accept the tradeoff or migrate to
-            // expo-secure-store later.
-            setPin(String(parsed.pin));
-          }
-
-          if (parsed.password) {
-            // Same security caveat as PIN. Stored so the merchant only
-            // re-types the OTP after a session expires, not the password.
-            setPassword(String(parsed.password));
-          }
-
-          if (parsed.sessionId) {
-            setSessionId(parsed.sessionId);
-          }
+          if (parsed.loginIdentifier) setLoginIdentifier(parsed.loginIdentifier);
+          if (parsed.recipientNumber) setRecipientNumber(parsed.recipientNumber);
+          if (parsed.currency) setCurrency(String(parsed.currency));
+          if (parsed.pin) setPin(String(parsed.pin));
+          if (parsed.password) setPassword(String(parsed.password));
         } catch {
           // Ignore corrupted storage.
         }
       })
       .finally(() => {
-        if (!cancelled) {
-          setHydrated(true);
-        }
+        if (!cancelled) setHydrated(true);
       });
 
     return () => {
@@ -128,103 +94,75 @@ export const SessionProvider = ({ children }) => {
   }, []);
 
   useEffect(() => {
-    if (!hydrated) {
-      return;
-    }
+    if (!hydrated) return;
 
     AsyncStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
         loginIdentifier,
         recipientNumber,
-        triggerBalance,
         currency,
         pin,
         password,
-        sessionId,
       })
     ).catch(() => {});
-  }, [hydrated, loginIdentifier, recipientNumber, triggerBalance, currency, pin, password, sessionId]);
+  }, [hydrated, loginIdentifier, recipientNumber, currency, pin, password]);
 
+  // ─── Subscribe to telesomSession snapshots ──────────────────────────────
   useEffect(() => {
-    if (!sessionId) {
-      setSnapshot(null);
-      return undefined;
-    }
+    const unsubscribe = telesomSession.subscribe((next) => {
+      setSnapshot(next);
+      if (next) setErrorMessage('');
+    });
+    return unsubscribe;
+  }, []);
 
+  // ─── SMS fast-path: subscribe once we're signed in (Android only) ──────
+  // Zaad/Telesom credit SMS arrives ~1s before /api/report/activity reflects
+  // the credit. We hand the parsed amount to telesomSession which prefers the
+  // WebView loop's same-origin b2p call when active.
+  useEffect(() => {
+    if (!isSignedIn || !isSmsSupported()) return;
+
+    let unsubscribe = () => {};
     let cancelled = false;
-    let timer = null;
 
-    const tick = async () => {
-      if (cancelled) {
-        return;
-      }
-
-      try {
-        const next = await getZaadSession(sessionId);
-
-        if (cancelled) {
-          return;
-        }
-
-        if (!next || next.status === 'signed_out') {
-          setSessionId('');
-          setSnapshot(null);
-          setErrorMessage('Session ended. Please sign in again.');
-          return;
-        }
-
-        setSnapshot(next);
-        setErrorMessage('');
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
-
-        if (error.status === 404) {
-          setSessionId('');
-          setSnapshot(null);
-          setErrorMessage('Session ended. Please sign in again.');
-          return;
-        }
-
-        setErrorMessage(error.message);
-      } finally {
-        if (!cancelled) {
-          timer = setTimeout(tick, POLL_INTERVAL_MS);
-        }
-      }
-    };
-
-    tick();
+    (async () => {
+      const granted = await ensureSmsPermission();
+      if (cancelled || !granted) return;
+      unsubscribe = subscribeToCreditSms((payload) => {
+        telesomSession
+          .notifyIncomingPayment({ amount: payload.amount, source: 'sms' })
+          .catch(() => {});
+      });
+    })();
 
     return () => {
       cancelled = true;
-
-      if (timer) {
-        clearTimeout(timer);
+      try {
+        unsubscribe();
+      } catch {
+        // ignore
       }
     };
-  }, [sessionId]);
+  }, [isSignedIn]);
 
+  // ─── Push auto-transfer settings into the session whenever they change ──
   useEffect(() => {
-    if (!sessionId || requiresOtp || !isConnected) {
-      return;
-    }
+    if (!sessionId || requiresOtp || !isConnected) return;
 
     const hash = `${autoTransferConfig.recipientNumber}|${autoTransferConfig.triggerBalanceUsd}|${autoTransferConfig.pin ? '1' : '0'}`;
-
-    if (hash === lastSettingsHashRef.current) {
-      return;
-    }
+    if (hash === lastSettingsHashRef.current) return;
 
     lastSettingsHashRef.current = hash;
-    refreshZaadBalance(sessionId, autoTransferConfig).catch(() => {});
+    telesomSession
+      .refreshBalance({ autoTransfer: autoTransferConfig })
+      .catch(() => {});
   }, [sessionId, requiresOtp, isConnected, autoTransferConfig]);
 
   const startSignIn = useCallback(
-    async (password) => {
-      if (!loginIdentifier.trim() || !password.trim()) {
+    async (passwordValue) => {
+      if (!loginIdentifier.trim() || !passwordValue.trim()) {
         setErrorMessage('Enter your phone number and password.');
         return false;
       }
@@ -233,17 +171,15 @@ export const SessionProvider = ({ children }) => {
       setErrorMessage('');
 
       try {
-        const session = await loginToZaad({
+        await telesomSession.createSession({
           loginIdentifier: loginIdentifier.trim(),
-          loginPassword: password,
+          loginPassword: passwordValue,
           currency,
           autoTransfer: autoTransferConfig,
         });
-        setSessionId(session.sessionId);
-        setSnapshot(session);
         return true;
-      } catch (error) {
-        setErrorMessage(error.message);
+      } catch (err) {
+        setErrorMessage(err.message);
         return false;
       } finally {
         setBusy(false);
@@ -254,12 +190,12 @@ export const SessionProvider = ({ children }) => {
 
   const submitOtp = useCallback(
     async (code) => {
-      if (!sessionId) {
+      if (!telesomSession.hasSession()) {
         setErrorMessage('Sign in again first.');
         return false;
       }
 
-      if (!code.trim()) {
+      if (!String(code || '').trim()) {
         setErrorMessage('Enter the SMS code.');
         return false;
       }
@@ -268,49 +204,40 @@ export const SessionProvider = ({ children }) => {
       setErrorMessage('');
 
       try {
-        const session = await submitZaadAuthenticationCode({
-          sessionId,
-          authenticationCode: code.trim(),
-          autoTransfer: autoTransferConfig,
-        });
-        setSnapshot(session);
+        await telesomSession.submitAuthenticationCode(code.trim(), autoTransferConfig);
         return true;
-      } catch (error) {
-        setErrorMessage(error.message);
+      } catch (err) {
+        setErrorMessage(err.message);
         return false;
       } finally {
         setBusy(false);
       }
     },
-    [autoTransferConfig, sessionId]
+    [autoTransferConfig]
   );
 
   const signOut = useCallback(async () => {
-    const id = sessionId;
-
-    setSessionId('');
-    setSnapshot(null);
+    telesomSession.destroySession();
     setPin('');
     setPassword('');
     lastSettingsHashRef.current = '';
+  }, []);
 
-    if (id) {
-      try {
-        await closeZaadSession(id);
-      } catch {
-        // Server may already have purged it.
-      }
-    }
-  }, [sessionId]);
+  // Used by the OTP screen's "Back" button — drops the pending Telesom
+  // session so the user can retype phone/password, but keeps PIN and
+  // password in the form so they don't have to retype everything.
+  const cancelSignIn = useCallback(() => {
+    telesomSession.destroySession();
+    lastSettingsHashRef.current = '';
+  }, []);
 
   const transferFunds = useCallback(
     async ({ recipientNumber: to, amountUsd, description, transactionPin }) => {
-      if (!sessionId) {
+      if (!telesomSession.hasSession()) {
         throw new Error('Sign in before sending money.');
       }
 
       const cleanPin = String(transactionPin || pin || '').replace(/\D/g, '');
-
       if (!cleanPin || cleanPin.length < 4) {
         throw new Error('Enter your 4-digit MyMerchant PIN.');
       }
@@ -319,25 +246,33 @@ export const SessionProvider = ({ children }) => {
       setErrorMessage('');
 
       try {
-        const session = await transferZaadFunds({
-          sessionId,
+        const result = await telesomSession.transfer({
           recipientNumber: to,
           amountUsd,
           description,
           transactionPin: cleanPin,
           confirmTransfer: true,
         });
-        setSnapshot(session);
-        return session;
-      } catch (error) {
-        setErrorMessage(error.message);
-        throw error;
+        return result;
+      } catch (err) {
+        setErrorMessage(err.message);
+        throw err;
       } finally {
         setBusy(false);
       }
     },
-    [pin, sessionId]
+    [pin]
   );
+
+  const loadTransactions = useCallback(async () => {
+    if (!telesomSession.hasSession()) return [];
+    return telesomSession.getRecentTransactions();
+  }, []);
+
+  const loadActivityReport = useCallback(async ({ startDate, endDate }) => {
+    if (!telesomSession.hasSession()) return [];
+    return telesomSession.getActivityReport({ startDate, endDate });
+  }, []);
 
   const value = useMemo(
     () => ({
@@ -347,7 +282,6 @@ export const SessionProvider = ({ children }) => {
       recipientNumber,
       setRecipientNumber,
       triggerBalance,
-      setTriggerBalance,
       currency,
       setCurrency,
       pin,
@@ -359,6 +293,7 @@ export const SessionProvider = ({ children }) => {
       busy,
       errorMessage,
       requiresOtp,
+      sessionExpired,
       isConnected,
       isSignedIn,
       balanceUsd,
@@ -369,7 +304,10 @@ export const SessionProvider = ({ children }) => {
       startSignIn,
       submitOtp,
       signOut,
+      cancelSignIn,
       transferFunds,
+      loadTransactions,
+      loadActivityReport,
     }),
     [
       accountHolderName,
@@ -377,17 +315,21 @@ export const SessionProvider = ({ children }) => {
       autoTransferState,
       balanceUsd,
       busy,
+      cancelSignIn,
       currency,
       errorMessage,
       hydrated,
       isConnected,
       isSignedIn,
+      loadActivityReport,
+      loadTransactions,
       loginIdentifier,
       password,
       pin,
       recentEvents,
       recipientNumber,
       requiresOtp,
+      sessionExpired,
       sessionId,
       signOut,
       snapshot,

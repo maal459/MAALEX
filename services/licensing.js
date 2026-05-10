@@ -24,7 +24,7 @@ ed.utils.sha512Sync = (...msgs) => {
 };
 
 // ─── Public key — safe to embed in app ───────────────────────────────────────
-const PUBLIC_KEY_HEX = '67a61b15bb113eb3751605a9ab0b8bac771e8914575c5f49b06e0c0372708986';
+const PUBLIC_KEY_HEX = '8cf7c96b341ed916546d2d2e5c23427b9154c143c00cbc81e1480e6c82298bd1';
 
 // ─── Trial config ─────────────────────────────────────────────────────────────
 const TRIAL_DURATION_MS = 3 * 24 * 60 * 60 * 1000; // 3 days

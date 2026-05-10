@@ -1,36 +1,44 @@
 {
   "expo": {
-    "name": "MAALEX",
+    "name": "Maal Solutions",
     "slug": "maalex",
-    "version": "10.0.1",
+    "version": "10.3.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "splash": {
       "image": "./assets/images/logo.png",
       "resizeMode": "contain",
-      "backgroundColor": "#111111"
+      "backgroundColor": "#0f172a"
     },
     "assetBundlePatterns": [
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.abdiwahab.maalex",
+      "buildNumber": "15"
     },
     "android": {
-      "permissions": ["android.permission.CALL_PHONE", "android.permission.RECEIVE_SMS"],
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.RECEIVE_SMS"
+      ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#111111"
+        "backgroundColor": "#0f172a"
       },
       "package": "com.abdiwahab.maalex",
-      "versionCode": 12
-    },
-    "web": {
-      "favicon": "./assets/favicon.png"
+      "versionCode": 15
     },
     "plugins": [
       "expo-font"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "c40f5763-d75e-459e-9d99-0719b6ffee2a"
+      }
+    },
+    "owner": "abdiwahaba2"
   }
 }

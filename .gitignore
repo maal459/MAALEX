@@ -36,3 +36,10 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
+
+# Claude Code worktrees (transient git worktrees, not source)
+.claude/worktrees/
+
+# HAR captures (recorded HTTP traffic — frequently contains session cookies,
+# auth tokens, and other secrets from the captured site).
+*.har

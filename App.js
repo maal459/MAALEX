@@ -1,5 +1,5 @@
 import 'react-native-gesture-handler';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -22,12 +22,8 @@ import SetupScreen from './screens/SetupScreen';
 import LiveScreen from './screens/LiveScreen';
 import ReportsScreen from './screens/ReportsScreen';
 import LicenseScreen from './screens/LicenseScreen';
-import {
-  clearLicenseKey,
-  loadStoredLicenseKey,
-  setCachedLicenseKey,
-  validateLicenseRemote,
-} from './services/zaadBackend';
+import TelesomWebViewHost from './components/TelesomWebViewHost';
+import { loadStoredLicenseKey, verifyLicense } from './services/licensing';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -39,7 +35,7 @@ const TAB_ICON = {
   Reports: { active: 'document-text', inactive: 'document-text-outline' },
 };
 
-const Header = ({ onSignOutLicense }) => {
+const Header = () => {
   const { colors, isDark, toggleMode } = useTheme();
   const { accountHolderName, isSignedIn } = useSession();
   const firstName = accountHolderName ? accountHolderName.split(/\s+/)[0] : '';
@@ -67,13 +63,6 @@ const Header = ({ onSignOutLicense }) => {
               size={18}
               color={colors.textPrimary}
             />
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={onSignOutLicense}
-            style={[styles.iconBtn, { borderColor: colors.border }]}
-            accessibilityLabel="License"
-          >
-            <Ionicons name="key-outline" size={18} color={colors.textPrimary} />
           </TouchableOpacity>
         </View>
       </View>
@@ -111,12 +100,12 @@ const Tabs = () => {
   );
 };
 
-const Shell = ({ onResetLicense }) => {
+const Shell = () => {
   const { colors } = useTheme();
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
-      <Header onSignOutLicense={onResetLicense} />
+      <Header />
       <Tabs />
     </View>
   );
@@ -134,17 +123,68 @@ const navTheme = (colors, isDark) => ({
   },
 });
 
-const ThemedRoot = ({ licenseValidated, onValidated, onResetLicense, initialError }) => {
-  const { colors, isDark } = useTheme();
+const LicenseGate = ({ children }) => {
+  const { colors } = useTheme();
+  const [checking, setChecking] = useState(true);
+  const [license, setLicense] = useState(null);
+  const [initialError, setInitialError] = useState('');
 
-  if (!licenseValidated) {
-    return <LicenseScreen onValidated={onValidated} initialError={initialError} />;
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const stored = await loadStoredLicenseKey();
+        if (!stored) {
+          if (!cancelled) setChecking(false);
+          return;
+        }
+        const result = await verifyLicense(stored);
+        if (cancelled) return;
+        if (result.ok) {
+          setLicense(result.license);
+        } else {
+          setInitialError(result.reason || '');
+        }
+      } catch {
+        // Fall through to LicenseScreen.
+      } finally {
+        if (!cancelled) setChecking(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (checking) {
+    return (
+      <View style={[styles.gateLoading, { backgroundColor: colors.background }]}>
+        <ActivityIndicator color={colors.primary} />
+      </View>
+    );
   }
 
+  if (!license) {
+    return (
+      <LicenseScreen
+        initialError={initialError}
+        onValidated={(validated) => setLicense(validated)}
+      />
+    );
+  }
+
+  return children;
+};
+
+const ThemedRoot = () => {
+  const { colors, isDark } = useTheme();
+
   return (
-    <NavigationContainer theme={navTheme(colors, isDark)}>
-      <Shell onResetLicense={onResetLicense} />
-    </NavigationContainer>
+    <LicenseGate>
+      <NavigationContainer theme={navTheme(colors, isDark)}>
+        <Shell />
+      </NavigationContainer>
+    </LicenseGate>
   );
 };
 
@@ -157,78 +197,13 @@ const App = () => {
     semiBold: require('./assets/fonts/Poppins-SemiBold.ttf'),
   });
 
-  const [licenseChecked, setLicenseChecked] = useState(false);
-  const [licenseValidated, setLicenseValidated] = useState(false);
-  const [licenseError, setLicenseError] = useState('');
-
   useEffect(() => {
-    let cancelled = false;
-
-    // Hard ceiling: never block the splash on the license check for more than
-    // 15 s. If the backend is unreachable, fall through to the License screen.
-    const failsafe = setTimeout(() => {
-      if (!cancelled) {
-        setLicenseError(
-          (prev) => prev || 'MAALEX backend is unreachable. Re-enter your license key.'
-        );
-        setLicenseChecked(true);
-      }
-    }, 15_000);
-
-    (async () => {
-      const stored = await loadStoredLicenseKey();
-
-      if (cancelled) {
-        return;
-      }
-
-      if (!stored) {
-        setLicenseChecked(true);
-        return;
-      }
-
-      setCachedLicenseKey(stored);
-
-      try {
-        await validateLicenseRemote(stored);
-        if (!cancelled) {
-          setLicenseValidated(true);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          await clearLicenseKey();
-          setLicenseError(error.message || 'Stored license is no longer valid.');
-        }
-      } finally {
-        if (!cancelled) {
-          setLicenseChecked(true);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      clearTimeout(failsafe);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (fontsLoaded && licenseChecked) {
+    if (fontsLoaded) {
       SplashScreen.hideAsync().catch(() => {});
     }
-  }, [fontsLoaded, licenseChecked]);
+  }, [fontsLoaded]);
 
-  const handleValidated = useCallback(() => {
-    setLicenseValidated(true);
-    setLicenseError('');
-  }, []);
-
-  const handleResetLicense = useCallback(async () => {
-    await clearLicenseKey();
-    setLicenseValidated(false);
-  }, []);
-
-  if (!fontsLoaded || !licenseChecked) {
+  if (!fontsLoaded) {
     return (
       <View style={{ flex: 1, backgroundColor: '#0f172a', alignItems: 'center', justifyContent: 'center' }}>
         <ActivityIndicator color="#22d3ee" />
@@ -240,13 +215,9 @@ const App = () => {
     <SafeAreaProvider>
       <ThemeProvider>
         <SessionProvider>
+          <TelesomWebViewHost />
           <StatusBarBridge />
-          <ThemedRoot
-            licenseValidated={licenseValidated}
-            onValidated={handleValidated}
-            onResetLicense={handleResetLicense}
-            initialError={licenseError}
-          />
+          <ThemedRoot />
         </SessionProvider>
       </ThemeProvider>
     </SafeAreaProvider>
@@ -284,6 +255,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
   },
+  gateLoading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 });
 
 export default App;

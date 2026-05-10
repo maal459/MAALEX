@@ -9,5 +9,5 @@ export const CONTACT_SETUP_MESSAGE =
   'Geli lambarka taageerada MAALEX gudaha constants/appConfig.js ka hor inta aanad isticmaalin adeeggan.';
 export const ZAAD_AUTO_TRANSFER_TARGET_NUMBER = '';
 export const ZAAD_AUTO_TRANSFER_AMOUNT_USD = '';
-export const ZAAD_AUTO_TRANSFER_TRIGGER_BALANCE_USD = 600;
+export const ZAAD_AUTO_TRANSFER_TRIGGER_BALANCE_USD = 0.1;
 export const ZAAD_AUTO_TRANSFER_DESCRIPTION = 'MAALEX automatic transfer';

@@ -1,13 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   Animated,
   Easing,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -61,6 +58,7 @@ const LiveScreen = () => {
   const {
     isSignedIn,
     requiresOtp,
+    sessionExpired,
     accountHolderName,
     accountLabel,
     balanceUsd,
@@ -68,52 +66,7 @@ const LiveScreen = () => {
     autoTransferState,
     snapshot,
     triggerBalance,
-    transferFunds,
-    busy,
   } = useSession();
-
-  const [sendTo, setSendTo] = useState('');
-  const [sendAmount, setSendAmount] = useState('');
-  const [sendDescription, setSendDescription] = useState('');
-  const [sendPin, setSendPin] = useState('');
-  const [sendError, setSendError] = useState('');
-  const [sendSuccess, setSendSuccess] = useState('');
-
-  const handleSend = async () => {
-    setSendError('');
-    setSendSuccess('');
-
-    if (!sendTo.trim()) {
-      setSendError('Enter the recipient phone number.');
-      return;
-    }
-
-    const amountValue = Number.parseFloat(String(sendAmount).replace(/,/g, ''));
-    if (!Number.isFinite(amountValue) || amountValue <= 0) {
-      setSendError('Enter an amount greater than 0.');
-      return;
-    }
-
-    if (!sendPin || sendPin.length < 4) {
-      setSendError('Enter your 4-digit MyMerchant PIN.');
-      return;
-    }
-
-    try {
-      await transferFunds({
-        recipientNumber: sendTo.trim(),
-        amountUsd: String(amountValue),
-        description: sendDescription.trim(),
-        transactionPin: sendPin,
-      });
-      setSendSuccess(`Sent $${amountValue} to ${sendTo.trim()}.`);
-      setSendAmount('');
-      setSendDescription('');
-      setSendPin('');
-    } catch (error) {
-      setSendError(error?.message || 'Transfer failed.');
-    }
-  };
 
   const flashAnim = useRef(new Animated.Value(0)).current;
   const previousBalanceRef = useRef(balanceUsd);
@@ -146,13 +99,22 @@ const LiveScreen = () => {
   });
 
   if (!isSignedIn) {
+    const expired = sessionExpired;
     return (
       <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]} edges={['top']}>
         <View style={styles.emptyState}>
-          <Ionicons name="cellular-outline" size={48} color={colors.textMuted} />
-          <Text style={[styles.emptyTitle, { color: colors.textPrimary }]}>Not signed in</Text>
+          <Ionicons
+            name={expired ? 'warning-outline' : 'cellular-outline'}
+            size={48}
+            color={expired ? colors.danger : colors.textMuted}
+          />
+          <Text style={[styles.emptyTitle, { color: expired ? colors.danger : colors.textPrimary }]}>
+            {expired ? 'Session expired' : 'Not signed in'}
+          </Text>
           <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
-            {requiresOtp
+            {expired
+              ? 'Telesom dropped your session. Open the Setup tab and sign in again to resume auto-transfer.'
+              : requiresOtp
               ? 'Enter the SMS code on the Setup tab to finish signing in.'
               : 'Use the Setup tab to sign in to MyMerchant.'}
           </Text>
@@ -226,80 +188,6 @@ const LiveScreen = () => {
               {autoTransferState?.recipientNumber || '—'}
             </Text>
           </View>
-        </View>
-
-        <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>Send money</Text>
-        <View
-          style={[
-            styles.sendCard,
-            { backgroundColor: colors.surface, borderColor: colors.border },
-          ]}
-        >
-          <Text style={[styles.sendLabel, { color: colors.textSecondary }]}>Recipient</Text>
-          <TextInput
-            style={[styles.sendInput, sendInputStyles(colors)]}
-            placeholder="0634XXXXXX"
-            placeholderTextColor={colors.textMuted}
-            keyboardType="phone-pad"
-            value={sendTo}
-            onChangeText={setSendTo}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-
-          <Text style={[styles.sendLabel, { color: colors.textSecondary }]}>Amount (USD)</Text>
-          <TextInput
-            style={[styles.sendInput, sendInputStyles(colors)]}
-            placeholder="0.00"
-            placeholderTextColor={colors.textMuted}
-            keyboardType="decimal-pad"
-            value={sendAmount}
-            onChangeText={setSendAmount}
-          />
-
-          <Text style={[styles.sendLabel, { color: colors.textSecondary }]}>Description (optional)</Text>
-          <TextInput
-            style={[styles.sendInput, sendInputStyles(colors)]}
-            placeholder="What is this for?"
-            placeholderTextColor={colors.textMuted}
-            value={sendDescription}
-            onChangeText={setSendDescription}
-          />
-
-          <Text style={[styles.sendLabel, { color: colors.textSecondary }]}>Transaction PIN</Text>
-          <TextInput
-            style={[styles.sendInput, sendInputStyles(colors)]}
-            placeholder="••••"
-            placeholderTextColor={colors.textMuted}
-            keyboardType="number-pad"
-            secureTextEntry
-            maxLength={6}
-            value={sendPin}
-            onChangeText={(value) => setSendPin(value.replace(/\D/g, ''))}
-          />
-
-          <TouchableOpacity
-            style={[
-              styles.sendButton,
-              { backgroundColor: colors.primary },
-              busy && { opacity: 0.6 },
-            ]}
-            onPress={handleSend}
-            disabled={busy}
-          >
-            {busy ? (
-              <ActivityIndicator color={colors.onPrimary} />
-            ) : (
-              <Text style={[styles.sendButtonText, { color: colors.onPrimary }]}>Send money</Text>
-            )}
-          </TouchableOpacity>
-
-          {sendError ? (
-            <Text style={[styles.sendErrorText, { color: colors.danger }]}>{sendError}</Text>
-          ) : null}
-          {sendSuccess ? (
-            <Text style={[styles.sendSuccessText, { color: colors.success }]}>{sendSuccess}</Text>
-          ) : null}
         </View>
 
         <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>Activity</Text>
@@ -406,38 +294,6 @@ const styles = StyleSheet.create({
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 30 },
   emptyTitle: { fontFamily: 'bold', fontSize: 18, marginTop: 10, marginBottom: 8 },
   emptySubtitle: { fontFamily: 'medium', fontSize: 13, textAlign: 'center' },
-  sendCard: { borderRadius: 16, padding: 16, marginBottom: 18, borderWidth: 1 },
-  sendLabel: {
-    fontFamily: 'medium',
-    fontSize: 11,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginTop: 10,
-    marginBottom: 6,
-  },
-  sendInput: {
-    borderRadius: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    fontFamily: 'medium',
-    fontSize: 15,
-    borderWidth: 1,
-  },
-  sendButton: {
-    marginTop: 16,
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  sendButtonText: { fontFamily: 'bold', fontSize: 15 },
-  sendErrorText: { fontFamily: 'medium', fontSize: 12, marginTop: 10 },
-  sendSuccessText: { fontFamily: 'medium', fontSize: 12, marginTop: 10 },
-});
-
-const sendInputStyles = (colors) => ({
-  backgroundColor: colors.background,
-  color: colors.textPrimary,
-  borderColor: colors.border,
 });
 
 export default LiveScreen;
